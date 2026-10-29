@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Care</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; background: #f6f8fa; color: #1f2933; }
+  main { max-width: 520px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 1.4rem; }
+  .step { display: none; }
+  .step.active { display: block; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  button, .card a.btn { font: inherit; border: 0; border-radius: 10px; padding: 14px; background: #2563eb; color: #fff; cursor: pointer; text-align: center; text-decoration: none; }
+  button.problem { background: #fff; color: #1f2933; border: 2px solid #d5dbe1; }
+  button.problem.selected { border-color: #2563eb; background: #e8f0fe; }
+  button.link { background: none; color: #2563eb; padding: 8px 0; }
+  label { display: block; margin: 12px 0 4px; font-weight: 600; }
+  input { width: 100%; box-sizing: border-box; font: inherit; padding: 12px; border: 1px solid #c4cdd5; border-radius: 8px; }
+  .card { background: #fff; border-radius: 12px; padding: 14px; margin: 10px 0; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+  .card h3 { margin: 0 0 4px; }
+  .card p { margin: 2px 0; color: #52606d; font-size: .95rem; }
+  .card .actions { display: flex; gap: 8px; margin-top: 10px; }
+  .card a.btn { padding: 8px 12px; font-size: .9rem; }
+  .error { color: #b42318; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Care</h1>
+
+  <section class="step active" id="step1">
+    <p>What do you need help with?</p>
+    <div class="grid" id="problems"></div>
+    <button id="next1" style="margin-top:14px;width:100%" disabled>Continue</button>
+  </section>
+
+  <section class="step" id="step2">
+    <p>A little about you (this is only used to find help near you).</p>
+    <label for="name">Name (optional)</label>
+    <input id="name" autocomplete="name">
+    <label for="place">City or ZIP code</label>
+    <input id="place" autocomplete="postal-code">
+    <button class="link" id="useLoc" type="button">Use my current location instead</button>
+    <button id="find" style="width:100%">Find providers</button>
+    <button class="link" id="back2" type="button">Back</button>
+  </section>
+
+  <section class="step" id="step3">
+    <h2 id="resultsTitle"></h2>
+    <div id="results"></div>
+    <button class="link" id="restart" type="button">Start over</button>
+  </section>
+</main>
+
+<script>
+const PROBLEMS = {
+  food: "🍞 Food", housing: "🏠 Housing", health: "🩺 Health care", mental: "💬 Mental health",
+  clothing: "👕 Clothing", legal: "⚖️ Legal help", jobs: "💼 Jobs",
+};
+const state = { problem: null, coords: null };
+const $ = (id) => document.getElementById(id);
+
+function show(n) {
+  document.querySelectorAll(".step").forEach((s) => s.classList.remove("active"));
+  $("step" + n).classList.add("active");
+}
+
+for (const [id, label] of Object.entries(PROBLEMS)) {
+  const b = document.createElement("button");
+  b.className = "problem";
+  b.textContent = label;
+  b.onclick = () => {
+    state.problem = id;
+    document.querySelectorAll(".problem").forEach((x) => x.classList.toggle("selected", x === b));
+    $("next1").disabled = false;
+  };
+  $("problems").appendChild(b);
+}
+
+$("next1").onclick = () => show(2);
+$("back2").onclick = () => show(1);
+$("restart").onclick = () => { state.coords = null; show(1); };
+
+$("useLoc").onclick = () => {
+  navigator.geolocation.getCurrentPosition(
+    (p) => { state.coords = { lat: p.coords.latitude, lng: p.coords.longitude }; $("place").value = "Current location"; },
+    () => alert("Couldn't get your location. Please type a city or ZIP code.")
+  );
+};
+$("place").oninput = () => { if ($("place").value !== "Current location") state.coords = null; };
+
+function el(tag, text, cls) {
+  const e = document.createElement(tag);
+  if (text) e.textContent = text;
+  if (cls) e.className = cls;
+  return e;
+}
+
+$("find").onclick = async () => {
+  const place = $("place").value.trim();
+  if (!state.coords && !place) return alert("Enter a city/ZIP or use your location.");
+  const q = new URLSearchParams({ problem: state.problem });
+  if (state.coords) { q.set("lat", state.coords.lat); q.set("lng", state.coords.lng); } else q.set("place", place);
+
+  $("resultsTitle").textContent = "Providers for " + PROBLEMS[state.problem];
+  $("results").replaceChildren(el("p", "Searching…"));
+  show(3);
+
+  try {
+    const r = await fetch("/api/providers?" + q);
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error);
+    if (!data.results.length) return $("results").replaceChildren(el("p", "No providers found. Try a nearby city."));
+    $("results").replaceChildren(...data.results.map((p) => {
+      const c = el("div", null, "card");
+      c.append(el("h3", p.name), el("p", p.address));
+      if (p.openNow !== undefined) c.append(el("p", p.openNow ? "Open now" : "Closed now"));
+      const a = el("div", null, "actions");
+      if (p.phone) { const t = el("a", "Call", "btn"); t.href = "tel:" + p.phone.replace(/[^\d+]/g, ""); a.append(t); }
+      if (p.website) { const w = el("a", "Website", "btn"); w.href = p.website; w.target = "_blank"; w.rel = "noopener"; a.append(w); }
+      if (p.mapsUrl) { const m = el("a", "Directions", "btn"); m.href = p.mapsUrl; m.target = "_blank"; m.rel = "noopener"; a.append(m); }
+      c.append(a);
+      return c;
+    }));
+  } catch (e) {
+    $("results").replaceChildren(el("p", "Something went wrong: " + e.message, "error"));
+  }
+};
+</script>
+</body>
+</html>
